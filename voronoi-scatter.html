@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html>
+  <head>
+	<!-- From http://bl.ocks.org/nbremer/61cd485e399b6a71d5fb2b1072fbc6c1 -->
+    <meta http-equiv="Content-Type" content="text/html;charset=utf-8"/>
+	<title>Scatterplot with Voronoi</title>
+
+	<!-- D3.js -->	
+    <script src="http://d3js.org/d3.v3.js"></script>
+	
+	<!-- jQuery -->
+	<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+	<!-- Latest compiled and minified CSS -->
+	<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.2/css/bootstrap.min.css">
+	<!-- Latest compiled and minified JavaScript -->
+	<script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.2/js/bootstrap.min.js"></script>
+	
+	<!-- Open Sans & CSS -->
+	<link href='http://fonts.googleapis.com/css?family=Open+Sans:700,400,300' rel='stylesheet' type='text/css'>
+	  <style>
+		body {
+		  font-family: 'Open Sans', sans-serif;
+		  font-size: 12px;
+		  font-weight: 400;
+		  color: #525252;
+		  text-align: center;
+		}	
+		
+		.axis path,
+		.axis line {
+			fill: none;
+			stroke: #B3B3B3;
+			shape-rendering: crispEdges;
+		}
+		.axis text {
+			font-size: 10px;
+			fill: #6B6B6B;
+		}
+
+		.entity {
+			pointer-events: none;
+		}
+
+		.circle-wrapper {
+			fill: none;
+			pointer-events: all;
+		}
+
+		.guide {
+			pointer-events: none;
+			font-size: 14px;
+			font-weight: 600;
+		}
+		
+		.popover {
+			pointer-events: none;
+		}
+		
+		.legendCircle {
+			stroke-width:1;
+			stroke:#999;
+			stroke-dasharray:2 2;
+			fill:none;
+		}
+
+		.legendLine {
+			stroke-width: 1;
+			stroke: #D1D1D1;
+			shape-rendering: crispEdges;
+		}
+
+		.legendTitle {
+			fill: #1A1A1A;
+			color: #1A1A1A;
+			text-anchor: middle;
+			font-size: 10px;
+		}
+
+		.legendText {
+			fill: #949494;
+			text-anchor: start;
+			font-size: 9px;
+		}
+		
+		@media (min-width: 500px) {
+		  .col-sm-3, .col-sm-9 {
+			float: left;
+		  }
+		  .col-sm-9 {
+			width: 75%;
+		  }
+		  .col-sm-3 {
+			width: 25%;
+		  }
+		}
+	</style>
+</head>
+<body>
+	<div id="cont" class="container-fluid text-center">
+		<div class="row scatter">
+			<h5 style="color: #3B3B3B;">Account scatter</h5>
+			<input type="text" id="search" />
+			<div id="loading"></div>
+			<div>
+				<div id="chart"></div>
+			</div>
+		</div>
+	</div>
+<script>
+/*Config Section */
+function dataFormatter(raw,i){
+		return {
+				id: i,
+				x: i,
+				y: raw["client_period_health_score.health_score"],
+				size: raw["account.current__mrr___c"],
+				category: raw["account_period_status.most_recent_cs_status"] || "∅",
+				searchString: raw["account.name"]
+					+ "|" + raw["account_period_status.most_recent_cs_status"],
+				tooltip:
+					raw["account_current_facts.next_renewal_month"]
+					+" - " + raw["account.name"]
+					+"\n Status:" + (raw["account_period_status.most_recent_cs_status"] || "∅")
+					+"\n MRR: $" + (raw["account.current__mrr___c"] || "∅")
+					//,
+				//click:function(evt){}
+			};
+	}
+valueBasedColors={
+		"Expected Churn":"#3E0000",
+		"Churn Risk":"#AB2020",
+		"Gone Dark":"#47262D",
+		"Expected Low Usage":"#CC8226",
+		"Reduction Risk":"#8F4BBF",
+		"Incubating":"#F4B04A",
+		"Neutral":"#D0D07D",
+		"Referenceable":"#A1F2D5",
+		"Expansion":"#1EB51E",
+		"Evaluating":"#DDD",
+		"Implementation":"#DDD",
+		"∅":"#000"
+	}
+positionBasedColors=[
+		"#EFB605", "#E58903", "#E01A25", "#C20049", "#991C71", "#66489F", "#2074A0", "#10A66E", "#7EB852",
+		"#EFB605", "#E58903", "#E01A25", "#C20049", "#991C71", "#66489F", "#2074A0", "#10A66E", "#7EB852",
+		"#EFB605", "#E58903", "#E01A25", "#C20049", "#991C71", "#66489F", "#2074A0", "#10A66E", "#7EB852",
+		"#EFB605", "#E58903", "#E01A25", "#C20049", "#991C71", "#66489F", "#2074A0", "#10A66E", "#7EB852",
+		"#EFB605", "#E58903", "#E01A25", "#C20049", "#991C71", "#66489F", "#2074A0", "#10A66E", "#7EB852"
+	]
+var cfg={
+		host:qs('host'),
+		query:qs('query'),
+		client_id:qs('client')||prompt("API ID"),
+		client_secret:prompt("API Secret")
+	}
+function qs(k){
+		return document.location.search.slice(1).split("&")
+		.filter(function(p){return p.indexOf(encodeURIComponent(k)+"=")===0})
+		.map(function(p){return decodeURIComponent(p.split("=").slice(1).join("="))})[0]
+	}
+</script>
+<script>
+Promise.resolve()
+.then(()=>$("#loading").text("Loading..."))
+.then(()=>$.post("http://localhost:1337/"+cfg.host+":19999/login",{
+		client_id:cfg.client_id,
+		client_secret:cfg.client_secret,
+	}))
+.then(auth=>((method,data)=>$.ajax({
+		url:"http://localhost:1337/"+cfg.host+":19999/api/3.0/"
+			+method,data:data,
+		beforeSend:req=>req.setRequestHeader("Authorization","token "+auth.access_token)})))
+.then(api=>api("queries/"+cfg.query+"/run/json"))
+.catch(err=>alert("\nDid you?...\n > npm install -g corsproxy-https\n > corsproxy")&&false)
+.then(graph)
+.then(()=>$("#loading").hide())
+
+
+
+function graph(raw){
+		if(!raw){return}
+		var data=raw.map(dataFormatter)
+		categories=data.map(d=>d.category).filter(unique)
+
+		function unique(x,i,arr){return arr.indexOf(x)==i}
+
+		////////////////////////////////////////////////////////////
+		//////////////////////// Set-up ////////////////////////////
+		////////////////////////////////////////////////////////////
+
+		//Quick fix for resizing some things for mobile-ish viewers
+		var mobileScreen = ($( window ).innerWidth() < 500 ? true : false);
+
+		//Scatterplot
+		var margin = {left: 60, top: 20, right: 20, bottom: 60},
+			width = Math.min($("#chart").width(), 1600) - margin.left - margin.right,
+			height = Math.min(width*2/3,$(window).height()*2/3);
+
+		var svg = d3.select("#chart").append("svg")
+				.attr("width", (width + margin.left + margin.right))
+				.attr("height", (height + margin.top + margin.bottom));
+					
+		var wrapper = svg.append("g").attr("class", "chordWrapper")
+				.attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+		//////////////////////////////////////////////////////
+		///////////// Initialize Axes & Scales ///////////////
+		//////////////////////////////////////////////////////
+
+		var opacityCircles = 0.7,
+			maxDistanceFromPoint = 50;
+
+		//Set the color for each region
+		var color = d3.scale.ordinal()
+				//.range(["#EFB605", "#E58903", "#E01A25", "#C20049", "#991C71", "#66489F", "#2074A0", "#10A66E", "#7EB852"])
+				.domain(categories)
+				.range(categories.map((c,i)=>valueBasedColors[c]||positionBasedColors[i]))
+									 
+		//Set the new x axis range
+		var xScale = d3.scale.linear()
+			.range([0, width])
+			.domain([0,data.length+1]); //I prefer this exact scale over the true range and then using "nice"
+			//.domain(d3.extent(data, function(d) { return d.x; }))
+			//.nice();
+		//Set new x-axis
+		var xAxis = d3.svg.axis()
+			.orient("bottom")
+			.ticks(2)
+			.tickFormat(function (d) {
+				return xScale.tickFormat((mobileScreen ? 4 : 8),function(d) { 
+					var prefix = d3.formatPrefix(d); 
+					return "$" + prefix.scale(d) + prefix.symbol;
+				})(d);
+			})	
+			.scale(xScale);	
+		//Append the x-axis
+		wrapper.append("g")
+			.attr("class", "x axis")
+			.attr("transform", "translate(" + 0 + "," + height + ")")
+			.call(xAxis);
+				
+		//Set the new y axis range
+		var yScale = d3.scale.linear()
+			.range([height,0])
+			.domain(d3.extent(data, function(d) { return d.y; }))
+			.nice();	
+		var yAxis = d3.svg.axis()
+			.orient("left")
+			.ticks(6)  //Set rough # of ticks
+			.scale(yScale);	
+		//Append the y-axis
+		wrapper.append("g")
+				.attr("class", "y axis")
+				.attr("transform", "translate(" + 0 + "," + 0 + ")")
+				.call(yAxis);
+				
+		//Scale for the bubble size
+		var rScale = d3.scale.sqrt()
+					.range([mobileScreen ? 1 : 2, mobileScreen ? 10 : 16])
+					.domain(d3.extent(data, function(d) { return d.size; }));
+
+		//////////////////////////////////////////////////////
+		///////////////// Initialize Labels //////////////////
+		//////////////////////////////////////////////////////
+
+		//Set up X axis label
+		wrapper.append("g")
+			.append("text")
+			.attr("class", "x title")
+			.attr("text-anchor", "end")
+			.style("font-size", (mobileScreen ? 8 : 12) + "px")
+			.attr("transform", "translate(" + width + "," + (height - 10) + ")")
+			.text("~Time till renawal");
+
+		//Set up y axis label
+		wrapper.append("g")
+			.append("text")
+			.attr("class", "y title")
+			.attr("text-anchor", "end")
+			.style("font-size", (mobileScreen ? 8 : 12) + "px")
+			.attr("transform", "translate(18, 0) rotate(-90)")
+			.text("Health Score");
+
+		////////////////////////////////////////////////////////////// 
+		//////////////////// Set-up voronoi ////////////////////////// 
+		////////////////////////////////////////////////////////////// 
+
+		//Initiate the voronoi function
+		//Use the same variables of the data in the .x and .y as used in the cx and cy of the circle call
+		//The clip extent will make the boundaries end nicely along the chart area instead of splitting up the entire SVG
+		//(if you do not do this it would mean that you already see a tooltip when your mouse is still in the axis area, which is confusing)
+		var voronoi = d3.geom.voronoi()
+			.x(function(d) { return xScale(d.x); })
+			.y(function(d) { return yScale(d.y); })
+			.clipExtent([[0, 0], [width, height]]);
+
+		var voronoiCells = voronoi(data);
+			
+		////////////////////////////////////////////////////////////	
+		///////////// Circles to capture close mouse event /////////
+		////////////////////////////////////////////////////////////	
+
+		//Create wrapper for the voronoi clip paths
+		var clipWrapper = wrapper.append("defs")
+		    .attr("class", "clipWrapper");
+
+		clipWrapper.selectAll(".clip")
+			.data(voronoiCells)
+			.enter().append("clipPath")
+		  	.attr("class", "clip")
+		  	.attr("id", function(d) { return "clip-id" + d.point.x; })
+		  	.append("path")
+		  	.attr("class", "clip-path-circle")
+		  	.attr("d", function(d) { return "M" + d.join(",") + "Z"; });
+
+		//Initiate a group element for the circles	
+		var circleClipGroup = wrapper.append("g")
+			.attr("class", "circleClipWrapper"); 
+			
+		//Place the larger circles to eventually capture the mouse
+		var circlesOuter = circleClipGroup.selectAll(".circle-wrapper")
+			.data(data.sort(function(a,b) { return b.size > a.size; }))
+			.enter().append("circle")
+			.attr("class", function(d,i) { return "circle-wrapper id" + d.id; })
+			.attr("clip-path", function(d) { return "url(#clip-id" + d.id + ")"; })
+		    .style("clip-path", function(d) { return "url(#clip-id" + d.id + ")"; })
+			.attr("cx", function(d) {return xScale(d.x);})
+			.attr("cy", function(d) {return yScale(d.y);})
+			.attr("r", maxDistanceFromPoint)
+			.on("mouseover", showTooltip)
+			.on("mouseout",  removeTooltip);;
+
+		////////////////////////////////////////////////////////////	
+		/////////////////// Scatterplot Circles ////////////////////
+		////////////////////////////////////////////////////////////	
+
+		//Initiate a group element for the circles	
+		var circleGroup = wrapper.append("g")
+			.attr("class", "circleWrapper"); 
+			
+		//Place the country circles
+		circleGroup.selectAll(".entity")
+			.data(data.sort(function(a,b) { return b.size > a.size; })) //Sort so the biggest circles are below
+			.enter().append("circle")
+				.attr("class", function(d,i) { return "entity id" + d.id; })
+				.attr("cx", function(d) {return xScale(d.x);})
+				.attr("cy", function(d) {return yScale(d.y);})
+				.attr("r", function(d) {return rScale(d.size);})
+				.style("opacity", opacityCircles)
+				.style("fill", d=>color(d.category));
+
+			
+		//Hide the tooltip when the mouse moves away
+		function removeTooltip (d, i) {
+
+			//Save the chosen circle (so not the voronoi)
+			var element = d3.selectAll(".entity.id"+d.id);
+				
+			//Fade out the bubble again
+			element.style("opacity", opacityCircles);
+			
+			//Hide tooltip
+			$('.popover').each(function() {
+				$(this).remove();
+			}); 
+		  
+			//Fade out guide lines, then remove them
+			d3.selectAll(".guide")
+				.transition().duration(200)
+				.style("opacity",  0)
+				.remove();
+				
+		}//function removeTooltip
+
+		//Show the tooltip on the hovered over slice
+		function showTooltip (d, i) {
+				
+				//Save the chosen circle (so not the voronoi)
+				var element = d3.selectAll(".entity.id"+d.id);
+				
+				//Define and show the tooltip
+				$(element).popover({
+					placement: 'auto top',
+					container: '#chart',
+					trigger: 'manual',
+					html : true,
+					content: function() { 
+						return "<span style='font-size: 11px; text-align: center; white-space:pre-wrap'>" + d.tooltip+"</span>"; }
+				});
+				$(element).popover('show');
+
+				//Make chosen circle more visible
+				element.style("opacity", 1);
+
+				//Place and show tooltip
+				var x = +element.attr("cx"),
+					y = +element.attr("cy"),
+					color = element.style("fill");
+
+				//Append lines to bubbles that will be used to show the precise data points
+				
+				//vertical line
+				wrapper
+						.append("line")
+						.attr("class", "guide")
+						.attr("x1", x)
+						.attr("x2", x)
+						.attr("y1", y)
+						.attr("y2", height + 20)
+						.style("stroke", color)
+						.style("opacity",  0)
+						.transition().duration(200)
+						.style("opacity", 0.5);
+				//Value on the axis
+				wrapper
+						.append("text")
+						.attr("class", "guide")
+						.attr("x", x)
+						.attr("y", height + 38)
+						.style("fill", color)
+						.style("opacity",  0)
+						.style("text-anchor", "middle")
+						.text( d.x )
+						.transition().duration(200)
+						.style("opacity", 0.5);
+
+				//horizontal line
+				wrapper
+						.append("line")
+						.attr("class", "guide")
+						.attr("x1", x)
+						.attr("x2", -20)
+						.attr("y1", y)
+						.attr("y2", y)
+						.style("stroke", color)
+						.style("opacity",  0)
+						.transition().duration(200)
+						.style("opacity", 0.5);
+				//Value on the axis
+				wrapper
+						.append("text")
+						.attr("class", "guide")
+						.attr("x", -25)
+						.attr("y", y)
+						.attr("dy", "0.35em")
+						.style("fill", color)
+						.style("opacity",  0)
+						.style("text-anchor", "end")
+						.text( d3.format(".1f")(d.y) )
+						.transition().duration(200)
+						.style("opacity", 0.5);	
+			}//function showTooltip
+		$("#search").on("keyup",function(evt){
+				var search=this.value.toLowerCase();
+				wrapper.selectAll(".entity")
+						.class("filtered", d=>{
+								return ~d.searchString.toLowerCase().indexOf(search)?opacityCircles:0.1
+							})
+					;
+			})
+	}
+
+</script>
+</html>
